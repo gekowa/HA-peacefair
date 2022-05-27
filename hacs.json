@@ -1,0 +1,9 @@
+{
+  "name": "Peacefair Electricity",
+  "country": "CN",
+  "render_readme": false,
+  "domains": ["peacefair"],
+  "zip_release": true,
+  "filename": "peacefair.zip",
+  "homeassistant":  "2022.3.0"
+}
