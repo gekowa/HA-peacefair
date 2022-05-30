@@ -143,7 +143,6 @@ def hexlify_packets(packet):
 
 
 def poll(host, port):
-    # TODO: Write some log
     conn = socket.socket()
     conn.connect((host, port))
 
