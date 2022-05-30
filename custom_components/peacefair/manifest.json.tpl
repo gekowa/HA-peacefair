@@ -1,8 +1,8 @@
 {
   "domain": "peacefair",
   "name": "Peacefair Electricity",
-  "config_flow": true,
-  "documentation": "https://www.home-assistant.io/integrations/peacefair",
+  "config_flow": false,
+  "documentation": "https://github.com/gekowa/HA-peacefair",
   "requirements": [],
   "ssdp": [],
   "zeroconf": [],

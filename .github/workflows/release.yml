@@ -4,7 +4,7 @@ name: Create release
 on:
   push:
     branches:
-      - master
+      - main
   workflow_dispatch:
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
       - name: Commit
         id: commit
         run: |
-          git commit -m "chore(release): version update to ${{ env.NEW_VERSION }}" custom_components/peacefair/manifest.json && git push origin master || true
+          git commit -m "chore(release): version update to ${{ env.NEW_VERSION }}" custom_components/peacefair/manifest.json && git push origin main || true
           git tag -f -a -m "v${{ env.NEW_VERSION }}" v${{ env.NEW_VERSION }} && git push -f --tags || true
   release:
     name: "Create release"
