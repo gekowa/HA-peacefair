@@ -95,6 +95,9 @@ def decode_result(bytes):
     # current = bytes_to_int_16(current_l, current_h) / 1000
     print(f"Current: {current} A")
 
+    if current > 100:
+        raise BadValue
+
     # power_l = bytes[9:11]
     # power_h = bytes[11:13]
     power_b = [*bytes[11:13], *bytes[9:11]]
