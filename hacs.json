@@ -5,5 +5,5 @@
   "domains": ["peacefair"],
   "zip_release": true,
   "filename": "peacefair.zip",
-  "homeassistant":  "2022.3.0"
+  "homeassistant":  "2024.6.3"
 }
