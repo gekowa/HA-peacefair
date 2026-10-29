@@ -105,6 +105,9 @@ def decode_result(bytes):
     power = int.from_bytes(power_b, "big") / 10
     print(f"Power: {power} W")
 
+    if power > 22000:
+        raise BadValue
+
     # consumption_l = bytes[13:15]
     # consumption_h = bytes[15:17]
     consumption_b = [*bytes[15:17], *bytes[13:15]]
