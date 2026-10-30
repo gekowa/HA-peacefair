@@ -59,6 +59,15 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
     ),
     SensorEntityDescription(
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        key="power_rounded",
+        name="Power Rounded",
+        icon="mdi:power-plug",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        suggested_display_precision=0,
+    ),
+    SensorEntityDescription(
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         key="power_consumption",
@@ -113,7 +122,7 @@ async def async_setup_entry(
     entry: PeacefairConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Create the six sensors from the shared coordinator."""
+    """Create the sensors from the shared coordinator."""
     async_add_entities(PFSensor(entry, description) for description in SENSOR_TYPES)
 
 
@@ -138,7 +147,10 @@ class PFSensor(CoordinatorEntity[PeacefairCoordinator], SensorEntity):
         )
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float | int | None:
         if self.coordinator.data is None:
             return None
+        if self.entity_description.key == "power_rounded":
+            # Meter power is non-negative; round half up to whole watts.
+            return int(self.coordinator.data.power + 0.5)
         return getattr(self.coordinator.data, self.entity_description.key)

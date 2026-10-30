@@ -23,6 +23,8 @@ LEGACY_IDS = {
     "sensor.peacefair_power_factor": "0.95",
 }
 
+EXPECTED_STATES = {**LEGACY_IDS, "sensor.peacefair_power_rounded": "284"}
+
 
 async def setup_entry(hass):
     entry = MockConfigEntry(domain=DOMAIN, data=CONNECTION, title="Peacefair")
@@ -44,9 +46,9 @@ async def test_ui_creates_entry_and_preserves_six_legacy_entities(hass, meter):
     entry = result["result"]
     assert dict(entry.data) == CONNECTION
     assert entry.state is ConfigEntryState.LOADED
-    assert {state.entity_id: state.state for state in hass.states.async_all("sensor")} == LEGACY_IDS
+    assert {state.entity_id: state.state for state in hass.states.async_all("sensor")} == EXPECTED_STATES
     registry = er.async_get(hass)
-    assert all(registry.async_get(entity_id).unique_id for entity_id in LEGACY_IDS)
+    assert all(registry.async_get(entity_id).unique_id for entity_id in EXPECTED_STATES)
     energy = hass.states.get("sensor.peacefair_power_consumption")
     assert energy.attributes["unit_of_measurement"] == "kWh"
     assert energy.attributes["state_class"] == "total_increasing"
@@ -114,17 +116,17 @@ async def test_yaml_upgrade_keeps_legacy_ids_without_duplicate_sensors(hass, met
         "sensor": [{"platform": DOMAIN, **CONNECTION}]
     })
     await hass.async_block_till_done()
-    assert {state.entity_id: state.state for state in hass.states.async_all("sensor")} == LEGACY_IDS
+    assert {state.entity_id: state.state for state in hass.states.async_all("sensor")} == EXPECTED_STATES
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
-    assert {state.entity_id for state in hass.states.async_all("sensor")} == set(LEGACY_IDS)
+    assert {state.entity_id for state in hass.states.async_all("sensor")} == set(EXPECTED_STATES)
 
 
 async def test_reconfigure_keeps_registry_ids_and_ignores_stale_yaml(hass, meter):
     entry = await setup_entry(hass)
     registry = er.async_get(hass)
-    unique_ids = {key: registry.async_get(key).unique_id for key in LEGACY_IDS}
+    unique_ids = {key: registry.async_get(key).unique_id for key in EXPECTED_STATES}
     registry.async_update_entity("sensor.peacefair_voltage", new_entity_id="sensor.my_voltage")
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "reconfigure", "entry_id": entry.entry_id}
@@ -138,7 +140,7 @@ async def test_reconfigure_keeps_registry_ids_and_ignores_stale_yaml(hass, meter
     assert hass.states.get("sensor.my_voltage").state == "230"
     assert registry.async_get("sensor.my_voltage").unique_id == unique_ids.pop("sensor.peacefair_voltage")
     assert all(registry.async_get(key).unique_id == value for key, value in unique_ids.items())
-    assert len(hass.states.async_all("sensor")) == 6
+    assert len(hass.states.async_all("sensor")) == 7
     await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_IMPORT}, data=CONNECTION
     )
@@ -172,11 +174,11 @@ async def test_disconnect_recovery_and_unload(hass, meter):
     meter.side_effect = OSError("offline")
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
-    assert all(hass.states.get(key).state == "unavailable" for key in LEGACY_IDS)
+    assert all(hass.states.get(key).state == "unavailable" for key in EXPECTED_STATES)
     meter.side_effect = read
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
-    assert {key: hass.states.get(key).state for key in LEGACY_IDS} == LEGACY_IDS
+    assert {key: hass.states.get(key).state for key in EXPECTED_STATES} == EXPECTED_STATES
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.NOT_LOADED
@@ -192,3 +194,36 @@ async def test_periodic_poll_updates_all_entities(hass, meter, freezer):
     await hass.async_block_till_done(wait_background_tasks=True)
     assert hass.states.get("sensor.peacefair_voltage").state == "231"
     assert hass.states.get("sensor.peacefair_power_consumption").state == "124"
+
+    assert hass.states.get("sensor.peacefair_power_rounded").state == "462"
+
+
+@pytest.mark.parametrize(
+    ("power", "expected"),
+    [(0, "0"), (0.4, "0"), (0.5, "1"), (282.5, "283"),
+     (283.4, "283"), (283.5, "284"), (283.8, "284"), (284, "284")],
+)
+async def test_power_rounded_uses_current_power(hass, meter, power, expected):
+    from custom_components.peacefair.pzwifi import PzSensorResult
+
+    meter.side_effect = lambda host, port: PzSensorResult(230, 1, power, 124, 50, 1)
+    entry = await setup_entry(hass)
+    state = hass.states.get("sensor.peacefair_power_rounded")
+    assert state is not None
+    assert state.state == expected
+    assert state.attributes["unit_of_measurement"] == "W"
+    assert state.attributes["device_class"] == "power"
+    assert state.attributes["state_class"] == "measurement"
+    assert float(hass.states.get("sensor.peacefair_power").state) == power
+    registered = er.async_get(hass).async_get(state.entity_id)
+    assert registered.unique_id == f"{entry.entry_id}_power_rounded"
+
+
+async def test_power_rounded_without_data_is_unknown(hass, meter):
+    from custom_components.peacefair.sensor import PFSensor, SENSOR_TYPES
+
+    entry = await setup_entry(hass)
+    description = next(item for item in SENSOR_TYPES if item.key == "power_rounded")
+    sensor = PFSensor(entry, description)
+    entry.runtime_data.async_set_updated_data(None)
+    assert sensor.native_value is None

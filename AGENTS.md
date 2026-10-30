@@ -45,7 +45,7 @@ sensor:
 ## 代码约定与常用模式（Code Conventions & Common Patterns）
 
 - 沿用 Python 四空格缩进、函数/变量 `snake_case`、类名 `PascalCase`、常量 `UPPER_SNAKE_CASE`；没有统一格式化配置，避免顺手重排无关代码。
-- 实体定义集中在 `SENSOR_TYPES` 的 `SensorEntityDescription`；字段名必须与 `PzSensorResult` 一致。现有拼写 **`freqency`** 同时用于结果字段、实体 key 和 `sensor.peacefair_freqency`，不能只改一处而忽略实体 ID 兼容性。
+- 实体定义集中在 `SENSOR_TYPES` 的 `SensorEntityDescription`；直接读数的 key 必须与 `PzSensorResult` 字段一致，派生实体 `power_rounded` 在实体层从 `power` 四舍五入到整数 W（0.5 向上取整）。现有拼写 **`freqency`** 同时用于结果字段、实体 key 和 `sensor.peacefair_freqency`，不能只改一处而忽略实体 ID 兼容性。
 - 保持寄存器高低字顺序和缩放规则；电能使用 kWh 与 `TOTAL_INCREASING`，其他实体沿用各自单位和状态类别。
 - 协议错误使用 `CRCError`、`BadValue`；`poll` 对超时和 CRC 错误最多尝试六次，耗尽后抛出异常。每次尝试使用带超时的新连接并可靠关闭；其他连接错误和 `BadValue` 直接上抛。
 - 配置校验和 coordinator 轮询均必须通过 `hass.async_add_executor_job` 调用同步 socket；`async_config_entry_first_refresh` 只能在条目 setup 内等待完成后加载实体。
@@ -71,5 +71,5 @@ sensor:
 
 - 使用 unittest 和 pytest；尚无覆盖率门槛或 CI 质量关卡。发布成功不等于功能验证，语法与 CRC 冒烟检查也不能代替集成测试。
 - 修改协议逻辑时运行协议回归：正常帧单位转换、错误 CRC、短帧、零功率、低功率因数、异常读数、TCP 分段及重试/关闭。测试只用本机模拟服务，不连接硬编码设备地址。
-- 修改实体/轮询后，在兼容 HA 与可控设备环境检查六个实体、首次读数、约 5 秒更新、断线/超时后的状态及日志；涉及多设备时检查实体 ID 是否冲突。
+- 修改实体/轮询后，在兼容 HA 与可控设备环境检查七个实体、首次读数、约 5 秒更新、断线/超时后的状态及日志；涉及多设备时检查实体 ID 是否冲突。
 - 区分真实 HA 测试实例（模拟计量设备）、本机 TCP 测试和实际设备验证；没有硬件时明确说明，不能以自动化通过替代实际 ESP32 通信验证。
