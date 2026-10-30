@@ -180,10 +180,33 @@ class ProtocolTests(unittest.TestCase):
         ):
             with self.subTest(response=response):
                 with meter_responses([response] * 6) as connections:
-                    with self.assertRaises(error_type):
+                    with patch.object(pzwifi.time, "sleep") as sleep, self.assertRaises(error_type):
                         pzwifi.poll("192.0.2.10", 9000)
                 self.assertEqual(len(connections), 6)
                 self.assertTrue(all(connection.closed for connection in connections))
+                self.assertEqual([call.args for call in sleep.call_args_list], [(0.1,)] * 5)
+
+    def test_retry_wait_occurs_after_close_before_reconnect(self):
+        for response in (TimeoutError("timeout"), frame()[:-2] + b"\x00\x00",
+                         frame(current=100001)):
+            with self.subTest(response=response):
+                with meter_responses([response, frame()]) as connections:
+                    def check_wait(delay):
+                        self.assertEqual(delay, 0.1)
+                        self.assertEqual(len(connections), 1)
+                        self.assertTrue(connections[0].closed)
+
+                    with patch.object(pzwifi.time, "sleep", side_effect=check_wait) as sleep:
+                        result = pzwifi.poll("192.0.2.10", 9000)
+                self.assertEqual(result.power, 283.8)
+                sleep.assert_called_once_with(0.1)
+                self.assertEqual(len(connections), 2)
+
+    def test_success_does_not_wait(self):
+        with meter_responses([frame()]), patch.object(pzwifi.time, "sleep") as sleep:
+            result = pzwifi.poll("192.0.2.10", 9000)
+        self.assertEqual(result.power, 283.8)
+        sleep.assert_not_called()
 
     def test_invalid_response_retries_until_valid_zero_power(self):
         for bad in (frame(current=100001), frame(power_factor=101),
@@ -236,11 +259,13 @@ class ProtocolTests(unittest.TestCase):
 
     def test_non_timeout_connection_error_is_not_retried(self):
         error = ConnectionRefusedError("offline")
-        with patch.object(pzwifi.socket, "create_connection", side_effect=error) as connect:
+        with patch.object(pzwifi.socket, "create_connection", side_effect=error) as connect, \
+                patch.object(pzwifi.time, "sleep") as sleep:
             with self.assertRaises(ConnectionRefusedError) as raised:
                 pzwifi.poll("192.0.2.10", 9000)
         self.assertIs(raised.exception, error)
         self.assertEqual(connect.call_count, 1)
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

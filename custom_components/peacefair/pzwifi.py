@@ -18,6 +18,7 @@ MSG = b"\x01\x04\x00\x00\x00\x0A\x70\x0D"
 RESPONSE_LENGTH = 25
 SOCKET_TIMEOUT = 1.0
 MAX_ATTEMPTS = 6
+RETRY_DELAY = 0.1
 
 
 def __generate_crc16_table():
@@ -113,8 +114,7 @@ def poll(host, port):
     """Read one sample with bounded I/O; retry timeout, CRC and invalid data."""
     for attempt in range(MAX_ATTEMPTS):
         try:
-            # A fresh connection prevents a delayed previous reply from being
-            # mistaken for the next one after a failed attempt.
+            # Close each attempt before waiting and opening a fresh connection.
             with socket.create_connection((host, port), timeout=SOCKET_TIMEOUT) as conn:
                 conn.sendall(MSG)
                 deadline = time.monotonic() + SOCKET_TIMEOUT
@@ -139,6 +139,7 @@ def poll(host, port):
             if attempt == MAX_ATTEMPTS - 1:
                 raise
             _LOGGER.debug("Retrying meter read after timeout, CRC or invalid data")
+            time.sleep(RETRY_DELAY)
 
 
 class CRCError(Exception):
