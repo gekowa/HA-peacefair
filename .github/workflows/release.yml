@@ -20,6 +20,8 @@ jobs:
     - name: checkout
       uses: actions/checkout@v2
       id: checkout
+      with:
+        fetch-depth: 0
 
     - name: Conventional Changelog Action
       id: changelog
@@ -29,6 +31,10 @@ jobs:
         output-file: "false"
         skip-version-file:   "true"
         skip-commit: "true"
+        skip-git-pull: "true"
+        skip-tag: "true"
+        git-push: "false"
+        pre-changelog-generation: .github/release-version.cjs
   version:
     name: "Update version"
     needs: changes
@@ -37,6 +43,8 @@ jobs:
     steps:
       - name: "Check out repository"
         uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
 
       - name: "Prepare"
         run: |
@@ -51,8 +59,11 @@ jobs:
       - name: Commit
         id: commit
         run: |
-          git commit -m "chore(release): version update to ${{ env.NEW_VERSION }}" custom_components/peacefair/manifest.json && git push origin main || true
-          git tag -f -a -m "v${{ env.NEW_VERSION }}" v${{ env.NEW_VERSION }} && git push -f --tags || true
+          if ! git diff --quiet -- custom_components/peacefair/manifest.json; then
+            git commit -m "chore(release): version update to ${{ env.NEW_VERSION }}" custom_components/peacefair/manifest.json
+          fi
+          git tag -a -m "v${{ env.NEW_VERSION }}" "v${{ env.NEW_VERSION }}"
+          git push --atomic origin HEAD:main "refs/tags/v${{ env.NEW_VERSION }}"
   release:
     name: "Create release"
     needs: [ changes, version ]
