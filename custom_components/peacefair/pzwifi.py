@@ -1,6 +1,5 @@
 import socket
 import time
-import os
 from collections import namedtuple
 import logging
 
@@ -16,6 +15,9 @@ PzSensorResult = namedtuple(
 )
 
 MSG = b"\x01\x04\x00\x00\x00\x0A\x70\x0D"
+RESPONSE_LENGTH = 25
+SOCKET_TIMEOUT = 1.0
+MAX_ATTEMPTS = 6
 
 
 def __generate_crc16_table():
@@ -60,6 +62,8 @@ def bytes_to_int_16(low_16, high_16):
 
 
 def check_crc(data):
+    if len(data) < 2:
+        return False
     crc = data[-2:]
     payload = data[:-2]
 
@@ -70,70 +74,27 @@ def check_crc(data):
     return crc[0] == expected_crc_h and crc[1] == expected_crc_l
 
 
-def decode_result(bytes):
-    # global ok, bad
-    # print(f'----------{len(bytes)} OK: {ok} BAD: {bad} BAD Rate: {round(100 * bad / (bad + ok))}% )')
+def decode_result(data):
+    """Decode a complete response, preserving the meter's register units."""
+    if len(data) != RESPONSE_LENGTH:
+        raise BadValue(f"Expected {RESPONSE_LENGTH} bytes, received {len(data)}")
+    if not check_crc(data):
+        raise CRCError("Invalid response CRC")
+    if data[:3] != b"\x01\x04\x14":
+        raise BadValue("Unexpected device address, function or byte count")
 
-    # if not (len(bytes) == 25):
-    #     print('Value error.')
-    #     bad += 1
-    #     return
+    voltage = int.from_bytes(data[3:5], "big") / 10
+    current = bytes_to_int_16(data[5:7], data[7:9]) / 1000
+    power = bytes_to_int_16(data[9:11], data[11:13]) / 10
+    consumption = bytes_to_int_16(data[13:15], data[15:17]) / 1000
+    freq = int.from_bytes(data[17:19], "big") / 10
+    power_factor = int.from_bytes(data[19:21], "big") / 100
 
-    if not check_crc(bytes):
-        raise CRCError
+    if current > 100 or power_factor > 1:
+        raise BadValue("Current or power factor outside the meter's range")
 
-    # should check CRC first
-    voltage_b = bytes[3:5]
-    voltage = int.from_bytes(voltage_b, "big") / 10
-    print(f"Voltage: {voltage} V")
-
-    # current_l = bytes[5:7]
-    # current_h = bytes[7:9]
-
-    current_b = [*bytes[7:9], *bytes[5:7]]
-    current = int.from_bytes(current_b, "big") / 1000
-    # current = bytes_to_int_16(current_l, current_h) / 1000
-    print(f"Current: {current} A")
-
-    if current > 100:
-        raise BadValue
-
-    # power_l = bytes[9:11]
-    # power_h = bytes[11:13]
-    power_b = [*bytes[11:13], *bytes[9:11]]
-    # power = bytes_to_int_16(power_l, power_h) / 10
-    power = int.from_bytes(power_b, "big") / 10
-    print(f"Power: {power} W")
-
-    if power > 22000:
-        raise BadValue
-
-    # consumption_l = bytes[13:15]
-    # consumption_h = bytes[15:17]
-    consumption_b = [*bytes[15:17], *bytes[13:15]]
-    # consumption = bytes_to_int_16(consumption_l, consumption_h) / 1000 / 1000
-    consumption = int.from_bytes(consumption_b, "big") / 1000
-    print(f"Consumption: {consumption} kWh")
-
-    freq_b = bytes[17:19]
-    freq = int.from_bytes(freq_b, "big") / 10
-    print(f"Frequency: {freq} Hz")
-
-    power_factor_b = bytes[19:21]
-    power_factor = int.from_bytes(power_factor_b, "big") / 100
-    print(f"Power factor: {power_factor}%")
-
-    alert_b = bytes[21:23]
-    alert = not int.from_bytes(alert_b, "big") == 0
-    print(f"Alert: {alert}")
-
-    print("----------")
-
-    # Check if P=I*A holds
-    power_delta = (power - current * voltage) / power
-    if abs(power_delta) > 0.5:
-        raise BadValue
-
+    # Active power need not equal voltage * current (apparent power).
+    # In particular, zero load and low power factor are valid measurements.
     return PzSensorResult(voltage, current, power, consumption, freq, power_factor)
 
 
@@ -149,34 +110,32 @@ def hexlify_packets(packet):
 
 
 def poll(host, port):
-    conn = socket.socket()
-    conn.connect((host, port))
-
-    conn.settimeout(1)
-
-    retries = 0
-
-    while retries <= 5:
-        retries += 1
-
-        conn.sendall(MSG)
-
+    """Read one sample with bounded I/O; retry timeout and CRC failures."""
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            data = conn.recv(1024)
-            _LOGGER.info(hexlify_packets(data))
-            result = decode_result(data)
-
-            if result is None:
-                print("Result is None. (BadValue)")
-                raise BadValue()
-
-            print("Result is OK.")
-            return result
-
-        except socket.timeout:
-            continue
-        except CRCError:
-            continue
+            # A fresh connection prevents a delayed previous reply from being
+            # mistaken for the next one after a timeout or CRC failure.
+            with socket.create_connection((host, port), timeout=SOCKET_TIMEOUT) as conn:
+                conn.sendall(MSG)
+                deadline = time.monotonic() + SOCKET_TIMEOUT
+                data = bytearray()
+                while len(data) < RESPONSE_LENGTH:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Timed out receiving the meter response")
+                    conn.settimeout(remaining)
+                    chunk = conn.recv(RESPONSE_LENGTH - len(data))
+                    if not chunk:
+                        raise BadValue("Connection closed before a complete response")
+                    data.extend(chunk)
+                    if len(data) >= 3 and data[:3] != b"\x01\x04\x14":
+                        raise BadValue("Unexpected response header or Modbus exception")
+                _LOGGER.debug("Meter response: %s", hexlify_packets(data))
+                return decode_result(data)
+        except (TimeoutError, CRCError):
+            if attempt == MAX_ATTEMPTS - 1:
+                raise
+            _LOGGER.debug("Retrying meter read after timeout or CRC failure")
 
 
 class CRCError(Exception):

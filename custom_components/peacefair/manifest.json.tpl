@@ -1,7 +1,7 @@
 {
   "domain": "peacefair",
   "name": "Peacefair Electricity",
-  "config_flow": false,
+  "config_flow": true,
   "documentation": "https://github.com/gekowa/HA-peacefair",
   "requirements": [],
   "ssdp": [],
@@ -12,5 +12,7 @@
     "@gekowa"
   ],
   "iot_class": "local_polling",
-  "version": "%%%VERSION%%%"
+  "version": "%%%VERSION%%%",
+  "single_config_entry": true,
+  "integration_type": "device"
 }

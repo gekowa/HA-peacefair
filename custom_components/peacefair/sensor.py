@@ -1,33 +1,37 @@
-"""Example integration using DataUpdateCoordinator."""
+"""Peacefair sensors and the legacy YAML import entry point."""
 
-from datetime import timedelta
 import logging
-from collections import OrderedDict
-
-# import async_timeout
 
 from homeassistant.components.sensor import (
-    SensorStateClass,
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
+    SensorStateClass,
 )
-
+from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import (
-    ELECTRIC_CURRENT_AMPERE,
-    ELECTRIC_POTENTIAL_VOLT,
-    ENERGY_KILO_WATT_HOUR,
-    FREQUENCY_HERTZ,
-    POWER_WATT,
+    CONF_HOST,
+    CONF_PORT,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfFrequency,
+    UnitOfPower,
 )
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-)
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .pzwifi import poll
+from .const import DOMAIN
+from .coordinator import PeacefairConfigEntry, PeacefairCoordinator
+from .schema import CONNECTION_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(CONNECTION_SCHEMA.schema)
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -36,7 +40,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="voltage",
         name="Voltage",
         icon="mdi:flash",
-        native_unit_of_measurement=ELECTRIC_POTENTIAL_VOLT,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.CURRENT,
@@ -44,7 +48,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="current",
         name="Current",
         icon="mdi:current-ac",
-        native_unit_of_measurement=ELECTRIC_CURRENT_AMPERE,
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.POWER,
@@ -52,7 +56,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="power",
         name="Power",
         icon="mdi:power-plug",
-        native_unit_of_measurement=POWER_WATT,
+        native_unit_of_measurement=UnitOfPower.WATT,
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.ENERGY,
@@ -60,7 +64,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="power_consumption",
         name="Consumption",
         icon="mdi:home-lightning-bolt",
-        native_unit_of_measurement=ENERGY_KILO_WATT_HOUR,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.POWER_FACTOR,
@@ -75,69 +79,66 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="freqency",
         name="Frequency",
         icon="mdi:sine-wave",
-        native_unit_of_measurement=FREQUENCY_HERTZ,
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
     ),
 )
 
 
+
 async def async_setup_platform(
-    hass, conf: OrderedDict, add_entities, discovery_info=None
-):
-    """Set up the sensor platform."""
-    print("PEACEFAIR: async_setup_platform")
-    print(conf)
-    host = conf.get("host")
-    port = conf.get("port")
-    print(host, port)
-
-    async def async_update_data():
-        return poll(host, port)
-
-    print("PEACEFAIR: DataUpdateCoordinator")
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name="Peacefair Electricity Sensor",
-        update_method=async_update_data,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=timedelta(seconds=5),
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
+    """Convert legacy YAML to a config entry without adding duplicate entities."""
+    if hass.config_entries.async_entries(DOMAIN):
+        return
+    _LOGGER.warning(
+        "Importing Peacefair YAML configuration. Once the integration appears in "
+        "Settings > Devices & services, remove its sensor platform from YAML; "
+        "future connection changes are made using Reconfigure"
+    )
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_IMPORT},
+            data={CONF_HOST: config[CONF_HOST], CONF_PORT: config[CONF_PORT]},
+        )
     )
 
-    # print("PEACEFAIR: async_config_entry_first_refresh")
-    coordinator.async_config_entry_first_refresh()
 
-    entities = [PFSensor(coordinator, description) for description in SENSOR_TYPES]
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: PeacefairConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Create the six sensors from the shared coordinator."""
+    async_add_entities(PFSensor(entry, description) for description in SENSOR_TYPES)
 
-    print("PEACEFAIR: add_entities")
-    add_entities(entities)
 
-    return True
+class PFSensor(CoordinatorEntity[PeacefairCoordinator], SensorEntity):
+    """A meter measurement with an identity independent of the IP address."""
 
+    _attr_has_entity_name = True
 
-class PFSensor(CoordinatorEntity, SensorEntity):
-    """An entity using CoordinatorEntity.
-
-    The CoordinatorEntity class provides:
-        should_poll
-        async_update
-        async_added_to_hass
-        available
-
-    """
-
-    def __init__(self, coordinator, description):
+    def __init__(
+        self, entry: PeacefairConfigEntry, description: SensorEntityDescription
+    ) -> None:
+        super().__init__(entry.runtime_data)
         self.entity_description = description
-        self._attr_name = description.name
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        # Preserve the IDs used by the old YAML platform, including 'freqency'.
+        # An existing registry entry (including user renames) takes precedence.
         self.entity_id = f"sensor.peacefair_{description.key}"
-        super().__init__(coordinator)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Peacefair Electricity",
+            manufacturer="Peacefair",
+        )
 
     @property
-    def native_value(self):
-        # print(repr(self.coordinator.data))
-        # print(dir(self.coordinator.data))
-        return self.coordinator.data.__getattribute__(self.entity_description.key)
-
-    @property
-    def native_unit_of_measurement(self):
-        return self.entity_description.native_unit_of_measurement
+    def native_value(self) -> float | None:
+        if self.coordinator.data is None:
+            return None
+        return getattr(self.coordinator.data, self.entity_description.key)

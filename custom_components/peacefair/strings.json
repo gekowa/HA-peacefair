@@ -2,20 +2,39 @@
   "config": {
     "step": {
       "user": {
+        "title": "Connect your Peacefair meter",
         "data": {
-          "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "host": "IP address or hostname",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the ESP32 serial bridge, without http://.",
+          "port": "TCP port of the ESP32 serial bridge (1\u201365535). Use the port configured on your device."
+        }
+      },
+      "reconfigure": {
+        "title": "Change the Peacefair connection",
+        "description": "Existing entities are retained when the IP address or port changes. The connection is tested before saving.",
+        "data": {
+          "host": "IP address or hostname",
+          "port": "Port"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the ESP32 serial bridge, without http://.",
+          "port": "TCP port of the ESP32 serial bridge (1\u201365535). Use the port configured on your device."
         }
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "cannot_connect": "Cannot connect. Check the IP address, port, and whether the device is online.",
+      "invalid_host": "Enter an IP address or hostname without a URL scheme or whitespace.",
+      "invalid_response": "Invalid meter response. Check the meter and serial bridge settings.",
+      "unknown": "Unexpected error. Check the Home Assistant logs."
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "single_instance_allowed": "Peacefair is already configured. Use Reconfigure to change its IP address and port.",
+      "reconfigure_successful": "Connection settings updated.",
+      "invalid_config": "Invalid YAML configuration: specify a host and a port from 1 to 65535."
     }
   }
 }

@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接 Peacefair 电能测量仪",
+        "data": {
+          "host": "IP 地址或主机名",
+          "port": "端口"
+        },
+        "data_description": {
+          "host": "ESP32 串口透传服务的 IP 地址或主机名，不含 http://。",
+          "port": "ESP32 TCP 透传服务的端口（1–65535），请填写设备的实际设置。"
+        }
+      },
+      "reconfigure": {
+        "title": "修改 Peacefair 连接",
+        "description": "修改 IP 或端口后保留现有实体。保存前会测试连接。",
+        "data": {
+          "host": "IP 地址或主机名",
+          "port": "端口"
+        },
+        "data_description": {
+          "host": "ESP32 串口透传服务的 IP 地址或主机名，不含 http://。",
+          "port": "ESP32 TCP 透传服务的端口（1–65535），请填写设备的实际设置。"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接设备，请检查 IP、端口和设备是否在线。",
+      "invalid_host": "请输入 IP 地址或主机名，不要包含 URL 或空白字符。",
+      "invalid_response": "设备返回的数据无效，请检查计量模块和串口透传设置。",
+      "unknown": "发生意外错误，请查看 Home Assistant 日志。"
+    },
+    "abort": {
+      "single_instance_allowed": "已配置 Peacefair，请通过“重新配置”修改现有设备的 IP 和端口。",
+      "reconfigure_successful": "连接配置已更新。",
+      "invalid_config": "YAML 配置无效：请指定主机和 1–65535 范围内的端口。"
+    }
+  }
+}
