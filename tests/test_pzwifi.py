@@ -1,6 +1,8 @@
 """Protocol regressions runnable without Home Assistant or a meter."""
 
 import importlib.util
+from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 import socket
 from threading import Thread
@@ -34,6 +36,47 @@ def with_crc(payload):
         for _ in range(8):
             crc = (crc >> 1) ^ (0xA001 if crc & 1 else 0)
     return payload + crc.to_bytes(2, "little")
+
+
+@contextmanager
+def meter_responses(responses):
+    """Supply one response per fresh connection, without contacting a meter."""
+    responses = iter(responses)
+    connections = []
+
+    class Connection:
+        def __init__(self, response):
+            self.response = response
+            self.stream = BytesIO(response) if isinstance(response, bytes) else None
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.closed = True
+
+        def sendall(self, request):
+            assert request == b"\x01\x04\x00\x00\x00\x0a\x70\x0d"
+
+        def settimeout(self, timeout):
+            assert 0 < timeout <= 1
+
+        def recv(self, count):
+            if isinstance(self.response, Exception):
+                raise self.response
+            return self.stream.read(count)
+
+    def connect(address, timeout):
+        assert address == ("192.0.2.10", 9000)
+        assert 0 < timeout <= 1
+        assert all(connection.closed for connection in connections)
+        connection = Connection(next(responses))
+        connections.append(connection)
+        return connection
+
+    with patch.object(pzwifi.socket, "create_connection", new=connect):
+        yield connections
 
 
 class ProtocolTests(unittest.TestCase):
@@ -125,46 +168,79 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(result.power_consumption, 123.456)
             self.assertEqual(observations, [pzwifi.MSG, b""])
 
-    def test_timeout_and_crc_retries_are_bounded_and_close_connections(self):
-        for response, error_type in ((TimeoutError("timeout"), TimeoutError),
-                                     (frame()[:-2] + b"\x00\x00", pzwifi.CRCError)):
+    def test_retries_are_bounded_and_close_connections(self):
+        for response, error_type in (
+            (TimeoutError("timeout"), TimeoutError),
+            (frame()[:-2] + b"\x00\x00", pzwifi.CRCError),
+            (frame(current=100001), pzwifi.BadValue),
+            (frame(power_factor=101), pzwifi.BadValue),
+            (b"\x02\x04\x14", pzwifi.BadValue),
+            (frame()[:10], pzwifi.BadValue),
+            (b"", pzwifi.BadValue),
+        ):
             with self.subTest(response=response):
-                connections = []
-
-                class Connection:
-                    closed = False
-
-                    def __enter__(self):
-                        return self
-
-                    def __exit__(self, *args):
-                        self.closed = True
-
-                    def sendall(self, request):
-                        if request != b"\x01\x04\x00\x00\x00\x0a\x70\x0d":
-                            raise AssertionError("Unexpected register request")
-
-                    def settimeout(self, timeout):
-                        if not 0 < timeout <= 1:
-                            raise AssertionError("Read must have a bounded timeout")
-
-                    def recv(self, count):
-                        if isinstance(response, Exception):
-                            raise response
-                        return response
-
-                def connect(address, timeout):
-                    self.assertEqual(address, ("192.0.2.10", 9000))
-                    self.assertGreater(timeout, 0)
-                    connection = Connection()
-                    connections.append(connection)
-                    return connection
-
-                with patch.object(pzwifi.socket, "create_connection", new=connect):
+                with meter_responses([response] * 6) as connections:
                     with self.assertRaises(error_type):
                         pzwifi.poll("192.0.2.10", 9000)
                 self.assertEqual(len(connections), 6)
                 self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_invalid_response_retries_until_valid_zero_power(self):
+        for bad in (frame(current=100001), frame(power_factor=101),
+                    b"\x02\x04\x14", frame()[:10], b""):
+            with self.subTest(response=bad):
+                with meter_responses(
+                    [bad, frame(current=0, power=0, power_factor=0)]
+                ) as connections:
+                    result = pzwifi.poll("192.0.2.10", 9000)
+                self.assertEqual(tuple(result), (230, 0, 0, 123.456, 50, 0))
+                self.assertEqual(len(connections), 2)
+                self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_mixed_errors_share_budget_and_allow_last_attempt_success(self):
+        responses = [TimeoutError("timeout"), frame(current=100001),
+                     frame()[:-2] + b"\x00\x00", b"", frame()[:10], frame()]
+        with meter_responses(responses) as connections:
+            result = pzwifi.poll("192.0.2.10", 9000)
+        self.assertEqual(tuple(result), (230, 1.234, 283.8, 123.456, 50, 1))
+        self.assertEqual(len(connections), 6)
+        self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_mixed_errors_raise_last_error_when_budget_exhausted(self):
+        last_error = pzwifi.BadValue("last invalid sample")
+        responses = [TimeoutError("timeout"), frame(current=100001),
+                     frame()[:-2] + b"\x00\x00", b"", frame()[:10], last_error]
+        with meter_responses(responses) as connections:
+            with self.assertRaises(pzwifi.BadValue) as raised:
+                pzwifi.poll("192.0.2.10", 9000)
+        self.assertIs(raised.exception, last_error)
+        self.assertEqual(len(connections), 6)
+        self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_none_result_is_retried(self):
+        valid = pzwifi.PzSensorResult(230, 0, 0, 123.456, 50, 0)
+        with meter_responses([frame()] * 2) as connections:
+            with patch.object(pzwifi, "decode_result", side_effect=[None, valid]):
+                result = pzwifi.poll("192.0.2.10", 9000)
+        self.assertEqual(result, valid)
+        self.assertEqual(len(connections), 2)
+        self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_persistent_none_result_exhausts_budget(self):
+        with meter_responses([frame()] * 6) as connections:
+            with patch.object(pzwifi, "decode_result", return_value=None):
+                with self.assertRaises(pzwifi.BadValue):
+                    pzwifi.poll("192.0.2.10", 9000)
+        self.assertEqual(len(connections), 6)
+        self.assertTrue(all(connection.closed for connection in connections))
+
+    def test_non_timeout_connection_error_is_not_retried(self):
+        error = ConnectionRefusedError("offline")
+        with patch.object(pzwifi.socket, "create_connection", side_effect=error) as connect:
+            with self.assertRaises(ConnectionRefusedError) as raised:
+                pzwifi.poll("192.0.2.10", 9000)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(connect.call_count, 1)
 
 
 if __name__ == "__main__":

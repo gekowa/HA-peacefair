@@ -47,7 +47,7 @@ sensor:
 - 沿用 Python 四空格缩进、函数/变量 `snake_case`、类名 `PascalCase`、常量 `UPPER_SNAKE_CASE`；没有统一格式化配置，避免顺手重排无关代码。
 - 实体定义集中在 `SENSOR_TYPES` 的 `SensorEntityDescription`；直接读数的 key 必须与 `PzSensorResult` 字段一致，派生实体 `power_rounded` 在实体层从 `power` 四舍五入到整数 W（0.5 向上取整）。现有拼写 **`freqency`** 同时用于结果字段、实体 key 和 `sensor.peacefair_freqency`，不能只改一处而忽略实体 ID 兼容性。
 - 保持寄存器高低字顺序和缩放规则；电能使用 kWh 与 `TOTAL_INCREASING`，其他实体沿用各自单位和状态类别。
-- 协议错误使用 `CRCError`、`BadValue`；`poll` 对超时和 CRC 错误最多尝试六次，耗尽后抛出异常。每次尝试使用带超时的新连接并可靠关闭；其他连接错误和 `BadValue` 直接上抛。
+- 协议错误使用 `CRCError`、`BadValue`；`poll` 对超时、CRC 错误和 `BadValue` 共用最多六次尝试，空解析结果按 `BadValue` 重试，耗尽后抛出最后一次异常。每次尝试使用带超时的新连接并可靠关闭；其他连接错误直接上抛。
 - 配置校验和 coordinator 轮询均必须通过 `hass.async_add_executor_job` 调用同步 socket；`async_config_entry_first_refresh` 只能在条目 setup 内等待完成后加载实体。
 - 无数据时 `native_value` 返回 `None`；更新失败由 coordinator 标为 unavailable，不提供虚假测量值。实体唯一标识使用配置条目 ID 和 key；首次注册保留旧 `sensor.peacefair_*` ID，后续尊重注册表中的用户改名。修改地址不重建配置条目。
 - 日志使用 `_LOGGER = logging.getLogger(__name__)`，协议报文只记 debug，不使用 print。

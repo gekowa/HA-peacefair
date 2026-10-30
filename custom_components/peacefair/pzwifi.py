@@ -110,11 +110,11 @@ def hexlify_packets(packet):
 
 
 def poll(host, port):
-    """Read one sample with bounded I/O; retry timeout and CRC failures."""
+    """Read one sample with bounded I/O; retry timeout, CRC and invalid data."""
     for attempt in range(MAX_ATTEMPTS):
         try:
             # A fresh connection prevents a delayed previous reply from being
-            # mistaken for the next one after a timeout or CRC failure.
+            # mistaken for the next one after a failed attempt.
             with socket.create_connection((host, port), timeout=SOCKET_TIMEOUT) as conn:
                 conn.sendall(MSG)
                 deadline = time.monotonic() + SOCKET_TIMEOUT
@@ -131,11 +131,14 @@ def poll(host, port):
                     if len(data) >= 3 and data[:3] != b"\x01\x04\x14":
                         raise BadValue("Unexpected response header or Modbus exception")
                 _LOGGER.debug("Meter response: %s", hexlify_packets(data))
-                return decode_result(data)
-        except (TimeoutError, CRCError):
+                result = decode_result(data)
+                if result is None:
+                    raise BadValue("Meter response contains no valid measurement")
+                return result
+        except (TimeoutError, CRCError, BadValue):
             if attempt == MAX_ATTEMPTS - 1:
                 raise
-            _LOGGER.debug("Retrying meter read after timeout or CRC failure")
+            _LOGGER.debug("Retrying meter read after timeout, CRC or invalid data")
 
 
 class CRCError(Exception):
